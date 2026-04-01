@@ -39,14 +39,16 @@ def _ask_popup(title, message):
 def _info_popup(title, message):
     root = tk.Tk()
     root.withdraw()
-    messagebox.showinfo(title, message)
+    root.attributes('-topmost', True)
+    messagebox.showinfo(title, message, parent=root)
     root.destroy()
 
 
 def _error_popup(title, message):
     root = tk.Tk()
     root.withdraw()
-    messagebox.showerror(title, message)
+    root.attributes('-topmost', True)
+    messagebox.showerror(title, message, parent=root)
     root.destroy()
 
 

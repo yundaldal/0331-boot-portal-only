@@ -1,8 +1,20 @@
 """업무포털 로그인만 단독 테스트 (브라우저 선택 가능)"""
-import sys, os
+import sys, os, tkinter as tk
+from tkinter import messagebox
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 os.chdir(BASE_DIR)
 sys.path.insert(0, BASE_DIR)
+
+
+def _notify(title, message, error=False):
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes('-topmost', True)
+    if error:
+        messagebox.showerror(title, message, parent=root)
+    else:
+        messagebox.showinfo(title, message, parent=root)
+    root.destroy()
 
 import logger_setup, config_manager, portal_login
 
@@ -33,3 +45,6 @@ if result:
         portal_login.open_additional_services(settings)
     else:
         logger.info("after_login=none → 추가 서비스 없음")
+    _notify('로그인 완료', '업무포털 로그인이 완료되었습니다.')
+else:
+    _notify('로그인 실패', '업무포털 자동 로그인에 실패했습니다.\nautologin.log를 확인해 주세요.', error=True)

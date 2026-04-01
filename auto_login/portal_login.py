@@ -480,25 +480,49 @@ def _login_via_existing_browser(portal_url, password, profile, skip_launch=False
     return _portal_keyboard_cert_flow(password, timeout=90)
 
 
+def _force_foreground(hwnd):
+    """
+    다른 앱이 포커스를 갖고 있어도 지정 창을 확실히 전면으로 올린다.
+    SetForegroundWindow 단독 호출은 비전경 프로세스에서 조용히 실패하므로
+    AttachThreadInput으로 현재 전경 스레드에 임시 결합 후 전환.
+    """
+    import ctypes
+    import win32gui, win32con
+    try:
+        if win32gui.IsIconic(hwnd):
+            win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+            time.sleep(0.2)
+        fg_hwnd = win32gui.GetForegroundWindow()
+        fg_tid = ctypes.windll.user32.GetWindowThreadProcessId(fg_hwnd, None)
+        our_tid = ctypes.windll.kernel32.GetCurrentThreadId()
+        if fg_tid and fg_tid != our_tid:
+            ctypes.windll.user32.AttachThreadInput(fg_tid, our_tid, True)
+            win32gui.SetForegroundWindow(hwnd)
+            win32gui.BringWindowToTop(hwnd)
+            ctypes.windll.user32.AttachThreadInput(fg_tid, our_tid, False)
+        else:
+            win32gui.SetForegroundWindow(hwnd)
+            win32gui.BringWindowToTop(hwnd)
+        time.sleep(0.2)
+        return True
+    except Exception as e:
+        logger.debug(f"force_foreground 실패: {e}")
+        return False
+
+
 def _bring_browser_to_front():
     """
     브라우저 창을 최상위로 올린다.
     메신저 등 다른 프로그램이 브라우저를 가리고 있을 때 호출.
     Chrome/Edge 모두 Chrome_WidgetWin_1 클래스 사용.
     """
-    import win32gui, win32con
     try:
         from pywinauto import Desktop
         for win in Desktop(backend="uia").windows(class_name="Chrome_WidgetWin_1"):
             if win.is_visible() and win.window_text().strip():
-                hwnd = win.handle
-                # 최소화 상태면 복원
-                if win32gui.IsIconic(hwnd):
-                    win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
-                    time.sleep(0.3)
-                win32gui.SetForegroundWindow(hwnd)
+                _force_foreground(win.handle)
                 logger.info(f"브라우저 창 최상위로 올림: '{win.window_text()}'")
-                time.sleep(0.3)
+                time.sleep(0.1)
                 return
     except Exception as e:
         logger.debug(f"브라우저 포커스 설정 실패 (무시): {e}")
@@ -616,11 +640,11 @@ def _portal_keyboard_cert_flow(password, timeout=90):
             win32clipboard.CloseClipboard()
 
             # 브라우저 창에 포커스 복구 (Chrome/Edge 공통 클래스)
+            # AttachThreadInput 방식 — 사용자가 다른 창 클릭 후에도 확실히 전면 전환
             try:
                 hwnd = win32gui.FindWindow('Chrome_WidgetWin_1', None)
                 if hwnd:
-                    win32gui.SetForegroundWindow(hwnd)
-                    time.sleep(0.3)
+                    _force_foreground(hwnd)
             except Exception:
                 pass
 
@@ -772,7 +796,8 @@ def _click_service_button_by_image(service):
 
     for confidence in (0.85, 0.75, 0.65):
         try:
-            box = cert_window_handler.locate_on_all_screens(ref_img, confidence=confidence)
+            # grayscale=True: 색상 무시하고 형태만 매칭 → Chrome/Edge 버튼 색상 차이 대응
+            box = cert_window_handler.locate_on_all_screens(ref_img, confidence=confidence, grayscale=True)
             if box:
                 cx = box.left + box.width // 2
                 cy = box.top + box.height // 2
@@ -854,11 +879,21 @@ def _click_service_by_text(service):
         for win in Desktop(backend='uia').windows(class_name='Chrome_WidgetWin_1'):
             if not win.is_visible():
                 continue
+            # VS Code 등 Electron 앱 제외
+            win_title = win.window_text().strip()
+            if not any(b in win_title for b in ['Chrome', 'Edge', 'eduptl', '업무포털']):
+                continue
             try:
                 for elem in win.descendants():
                     try:
                         text = elem.window_text().strip()
                         if not text:
+                            continue
+                        # 파일명/경로는 버튼이 아님 (VS Code 탭, 탐색기 등 오탐 방지)
+                        if '\\' in text or '/' in text:
+                            continue
+                        if any(text.lower().endswith(ext) for ext in
+                               ('.png', '.jpg', '.py', '.txt', '.csv', '.exe', '.ini', '.log')):
                             continue
                         if any(kw.lower() in text.lower() for kw in keywords):
                             rect = elem.rectangle()
@@ -887,32 +922,58 @@ def _return_to_portal_window(portal_url):
     """
     서비스 탭/창이 열린 후 포털 탭으로 포커스를 복귀.
 
-    나이스/에듀파인은 같은 Chrome 창의 새 탭으로 열리는 경우가 많으므로
-    창 제목 검색보다 탭 바의 TabItem 클릭이 우선.
+    나이스/에듀파인은 같은 브라우저 창의 새 탭으로 열리는 경우가 많으므로
+    창 제목 검색보다 탭 직접 클릭이 우선.
 
-    1순위: Chrome 탭 바에서 '업무포털' TabItem 찾아 클릭
-    2순위: 별도 창으로 열린 경우 창 제목으로 탐색 (SetForegroundWindow)
+    1순위: 탭 바에서 '업무포털' 텍스트를 가진 요소 클릭
+           Chrome=TabItem, Edge=ListItem 등 브라우저/버전마다 컨트롤 타입이 다를 수 있으므로
+           타입 무관하게 텍스트+크기 조건으로 탐색
+    2순위: 포털이 별도 창으로 열린 경우 창 제목으로 탐색 (SetForegroundWindow)
     """
     import win32gui, win32con
     import pyautogui
     pyautogui.FAILSAFE = False
-    PORTAL_TAB_KEYWORDS = ['업무포털', 'eduptl', '교육행정']
+    PORTAL_TAB_KEYWORDS = ['업무포털', 'eduptl']
+    # 브라우저 탭 컨트롤 타입 (Chrome=TabItem, Edge=ListItem)
+    # Group/Custom 제외: VS Code 등 Electron 앱도 Chrome_WidgetWin_1 클래스를 사용하므로
+    # 이들 창의 Group 요소가 오탐될 수 있음
+    TAB_CONTROL_TYPES = {'TabItem', 'ListItem', 'Button'}
 
     try:
         from pywinauto import Desktop
         for win in Desktop(backend='uia').windows(class_name='Chrome_WidgetWin_1'):
             if not win.is_visible():
                 continue
+            # VS Code 등 Electron 앱 제외: 브라우저 창은 제목에 브라우저명 또는 eduptl 포함
+            win_title = win.window_text().strip()
+            is_browser = any(b in win_title for b in ['Chrome', 'Edge', 'eduptl', '업무포털'])
+            if not is_browser:
+                continue
             try:
-                # 1순위: 탭 바 TabItem 클릭 — 같은 창 내 탭 전환
-                for tab in win.descendants(control_type='TabItem'):
+                # 1순위: 탭 바 요소 클릭 — 텍스트+컨트롤 타입+크기+경로 아님 조건
+                for elem in win.descendants():
                     try:
-                        title = tab.window_text().strip()
-                        if any(kw in title for kw in PORTAL_TAB_KEYWORDS):
-                            tab.click_input()
-                            logger.info(f"포털 탭 클릭으로 복귀: '{title}'")
-                            time.sleep(0.5)
-                            return True
+                        title = elem.window_text().strip()
+                        if not title:
+                            continue
+                        if not any(kw in title for kw in PORTAL_TAB_KEYWORDS):
+                            continue
+                        # 파일 경로나 파일명은 탭이 아님
+                        if '\\' in title or '/' in title or '.' in title:
+                            continue
+                        ct = elem.element_info.control_type
+                        if ct not in TAB_CONTROL_TYPES:
+                            continue
+                        # 탭은 가로로 길고 세로는 짧음 (높이 10~60px 범위)
+                        rect = elem.rectangle()
+                        h = rect.bottom - rect.top
+                        w = rect.right - rect.left
+                        if not (10 <= h <= 60 and w >= 30):
+                            continue
+                        elem.click_input()
+                        logger.info(f"포털 탭 클릭으로 복귀 (type={ct}): '{title}'")
+                        time.sleep(0.5)
+                        return True
                     except Exception:
                         pass
             except Exception:
@@ -924,13 +985,9 @@ def _return_to_portal_window(portal_url):
                 continue
             title = win.window_text().strip()
             if any(kw in title for kw in PORTAL_TAB_KEYWORDS):
-                hwnd = win.handle
-                if win32gui.IsIconic(hwnd):
-                    win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
-                    time.sleep(0.3)
-                win32gui.SetForegroundWindow(hwnd)
+                _force_foreground(win.handle)
                 logger.info(f"포털 창 복귀 (별도 창): '{title}'")
-                time.sleep(0.5)
+                time.sleep(0.3)
                 return True
     except Exception as e:
         logger.debug(f"포털 창 복귀 실패: {e}")
