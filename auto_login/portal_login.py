@@ -111,12 +111,39 @@ def _close_browser(profile):
     _wait_browser_exit(profile, timeout=5)
 
 
+def _wait_for_network(host='eduptl.kr', timeout=60, interval=3):
+    """
+    부팅 직후 네트워크 미연결 상태 대응.
+    포털 도메인에 TCP 연결이 가능해질 때까지 최대 timeout초 대기.
+    """
+    import socket
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            socket.setdefaulttimeout(3)
+            socket.socket(socket.AF_INET, socket.SOCK_STREAM).connect((host, 443))
+            logger.info(f"네트워크 연결 확인 완료 ({host}:443)")
+            return True
+        except Exception:
+            remaining = int(deadline - time.time())
+            logger.info(f"네트워크 연결 대기 중... ({remaining}초 남음)")
+            time.sleep(interval)
+    logger.warning(f"네트워크 대기 타임아웃 ({timeout}초) — 연결 없이 진행")
+    return False
+
+
 def prepare_browser(portal_url, settings):
     """
     브라우저 사전 준비.
-    기존 브라우저 종료 → 포털 URL로 브라우저 실행 → 창 대기.
+    네트워크 연결 확인 → 기존 브라우저 종료 → 포털 URL로 브라우저 실행 → 창 대기.
     """
     import subprocess as _sp
+
+    # 부팅 직후 네트워크 미연결 상태 대응 (포털 도메인 기준)
+    import re as _re
+    m = _re.match(r'https?://([^/]+)', portal_url)
+    host = m.group(1) if m else 'eduptl.kr'
+    _wait_for_network(host=host, timeout=60)
 
     profile = _get_profile(settings)
     name = profile['display_name']
@@ -307,6 +334,9 @@ def _handle_permission_popup(timeout=8):
         try:
             desk = Desktop(backend="uia")
             for win in desk.windows(class_name="Chrome_WidgetWin_1"):
+                # VS Code 등 Electron 앱 제외 — 브라우저 창만 탐색
+                if not any(b in win.window_text() for b in ['Chrome', 'Edge', 'eduptl', '업무포털']):
+                    continue
                 try:
                     for btn in win.descendants(control_type="Button"):
                         label = btn.window_text().strip()
@@ -515,15 +545,22 @@ def _bring_browser_to_front():
     브라우저 창을 최상위로 올린다.
     메신저 등 다른 프로그램이 브라우저를 가리고 있을 때 호출.
     Chrome/Edge 모두 Chrome_WidgetWin_1 클래스 사용.
+    VS Code 등 Electron 앱도 동일 클래스이므로 브라우저 제목으로 필터링.
     """
     try:
         from pywinauto import Desktop
         for win in Desktop(backend="uia").windows(class_name="Chrome_WidgetWin_1"):
-            if win.is_visible() and win.window_text().strip():
-                _force_foreground(win.handle)
-                logger.info(f"브라우저 창 최상위로 올림: '{win.window_text()}'")
-                time.sleep(0.1)
-                return
+            if not win.is_visible():
+                continue
+            title = win.window_text().strip()
+            if not title:
+                continue
+            if not any(b in title for b in ['Chrome', 'Edge', 'eduptl', '업무포털']):
+                continue
+            _force_foreground(win.handle)
+            logger.info(f"브라우저 창 최상위로 올림: '{title}'")
+            time.sleep(0.1)
+            return
     except Exception as e:
         logger.debug(f"브라우저 포커스 설정 실패 (무시): {e}")
 

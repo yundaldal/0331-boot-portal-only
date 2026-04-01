@@ -97,12 +97,12 @@ def run_setup_gui():
     except Exception:
         pass
 
-    # 인증서 비밀번호
+    # 인증서 비밀번호 (평문 표시 — 오타 방지)
     tk.Label(root, text='인증서 비밀번호 *', anchor='w').grid(
         row=2, column=0, sticky='w', **pad)
 
     password_var = tk.StringVar()
-    tk.Entry(root, textvariable=password_var, width=42, show='*').grid(
+    tk.Entry(root, textvariable=password_var, width=42).grid(
         row=2, column=1, columnspan=2, padx=(0, 10), pady=8)
 
     # 부팅 옵션
@@ -122,22 +122,26 @@ def run_setup_gui():
         variable=boot_var, value='ask'
     ).pack(anchor='w')
 
-    # 로그인 후 추가 열기
-    tk.Label(root, text='로그인 후 추가 열기', anchor='w').grid(
-        row=4, column=0, sticky='w', **pad)
+    # 로그인 후 열기 (업무포털은 항상 열림)
+    tk.Label(root, text='로그인 후 열기', anchor='w').grid(
+        row=4, column=0, sticky='nw', **pad)
 
     after_var = tk.StringVar(value='none')
     after_frame = tk.Frame(root)
     after_frame.grid(row=4, column=1, columnspan=2, sticky='w', padx=(0, 10), pady=4)
 
-    tk.Radiobutton(after_frame, text='업무포털만',
-                   variable=after_var, value='none').pack(side='left')
-    tk.Radiobutton(after_frame, text='나이스',
-                   variable=after_var, value='neis').pack(side='left')
-    tk.Radiobutton(after_frame, text='K-에듀파인',
-                   variable=after_var, value='edufine').pack(side='left')
-    tk.Radiobutton(after_frame, text='나이스 + K-에듀파인',
-                   variable=after_var, value='both').pack(side='left')
+    tk.Radiobutton(after_frame,
+                   text='업무포털만',
+                   variable=after_var, value='none').pack(anchor='w')
+    tk.Radiobutton(after_frame,
+                   text='업무포털  +  나이스',
+                   variable=after_var, value='neis').pack(anchor='w')
+    tk.Radiobutton(after_frame,
+                   text='업무포털  +  K-에듀파인',
+                   variable=after_var, value='edufine').pack(anchor='w')
+    tk.Radiobutton(after_frame,
+                   text='업무포털  +  나이스  +  K-에듀파인',
+                   variable=after_var, value='both').pack(anchor='w')
 
     # 기존 config 있으면 after_login 값 복원
     try:
