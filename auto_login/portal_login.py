@@ -707,8 +707,8 @@ def _dismiss_portal_banners():
     포털 로그인 직후 표시되는 배너/공지 팝업을 닫는다.
     '닫기', '확인', '오늘 하루 열지 않기' 등 버튼을 탐색하여 클릭.
     """
-    CLOSE_LABELS = ('닫기', '확인', '오늘 하루 열지 않기', 'Close',
-                    '×', 'X', '오늘하루열지않기')
+    # '확인' 제외 — 배너가 아닌 일반 다이얼로그의 확인 버튼 오클릭 방지
+    CLOSE_LABELS = ('닫기', '오늘 하루 열지 않기', 'Close', '×', 'X', '오늘하루열지않기')
     try:
         from pywinauto import Desktop
         desk = Desktop(backend='uia')
@@ -773,11 +773,18 @@ def _find_service_btn_via_uia(service, region):
     Chrome: neis→klef URL, Edge: neis→neis URL (브라우저별 ID 패턴 역전 허용).
     반환: (cx, cy) or None
     """
-    # 두 브라우저 모두 대응: 지역 코드 기반 URL 패턴
+    # Chrome/Edge에서 버튼 @id URL이 역전될 수 있으므로 두 패턴 모두 탐색.
+    # 이미지 매칭(1순위)이 실패했을 때의 폴백이므로 오탐보다 미탐 방지 우선.
     if service == 'neis':
-        patterns = [f'{region}.neis.go.kr', 'neis.go.kr'] if region else ['neis.go.kr']
+        patterns = (
+            [f'{region}.neis.go.kr', f'klef.{region}.go.kr', 'neis.go.kr', 'klef.']
+            if region else ['neis.go.kr', 'klef.']
+        )
     else:  # edufine
-        patterns = [f'klef.{region}.go.kr', 'klef.'] if region else ['klef.']
+        patterns = (
+            [f'klef.{region}.go.kr', f'{region}.neis.go.kr', 'klef.', 'neis.go.kr']
+            if region else ['klef.', 'neis.go.kr']
+        )
 
     try:
         from pywinauto import Desktop

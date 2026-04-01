@@ -26,6 +26,9 @@ __pycache__/
 # Claude Code 로컬 설정
 .claude/
 
+# 루트에 잔존하는 원본 이미지 (auto_login/ 안에 복사본이 정본)
+ksign_ref.png
+
 # OS
 .DS_Store
 Thumbs.db

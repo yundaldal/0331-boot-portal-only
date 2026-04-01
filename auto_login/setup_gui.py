@@ -102,7 +102,7 @@ def run_setup_gui():
         row=2, column=0, sticky='w', **pad)
 
     password_var = tk.StringVar()
-    tk.Entry(root, textvariable=password_var, width=42).grid(
+    tk.Entry(root, textvariable=password_var, width=42, show='*').grid(
         row=2, column=1, columnspan=2, padx=(0, 10), pady=8)
 
     # 부팅 옵션
