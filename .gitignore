@@ -1,0 +1,31 @@
+# 가상환경
+auto_login/venv/
+
+# 빌드 결과물
+auto_login/dist/
+auto_login/build/
+dist/
+build/
+
+# 로그
+*.log
+
+# 사용자 설정 (인증서 비밀번호 포함)
+auto_login/config.ini
+auto_login/config.ini.bak
+config.ini
+
+# Python 캐시
+__pycache__/
+*.pyc
+*.pyo
+
+# PyInstaller 임시 파일
+*.spec.bak
+
+# Claude Code 로컬 설정
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
