@@ -705,10 +705,18 @@ def _get_ref_image(filename):
 def _dismiss_portal_banners():
     """
     포털 로그인 직후 표시되는 배너/공지 팝업을 닫는다.
-    '닫기', '확인', '오늘 하루 열지 않기' 등 버튼을 탐색하여 클릭.
+
+    실제 포털 배너 구조:
+      [ ] 오늘 하루 이창을 열지 않음   ← 체크박스
+      [ ] 일주일동안 이창을 열지 않음  ← 체크박스
+      [닫기]                           ← 닫기 버튼
+
+    체크박스를 먼저 클릭(오늘 하루 비표시)한 뒤 닫기 버튼을 클릭한다.
     """
-    # '확인' 제외 — 배너가 아닌 일반 다이얼로그의 확인 버튼 오클릭 방지
-    CLOSE_LABELS = ('닫기', '오늘 하루 열지 않기', 'Close', '×', 'X', '오늘하루열지않기')
+    CLOSE_BTN_LABELS = ('닫기', 'Close', '×', 'X')
+    # 체크박스 텍스트 — 실제 확인된 포털 배너 텍스트
+    TODAY_CHECKBOX_TEXTS = ('오늘 하루 이창을 열지 않음',)
+
     try:
         from pywinauto import Desktop
         desk = Desktop(backend='uia')
@@ -716,12 +724,24 @@ def _dismiss_portal_banners():
             if not win.is_visible():
                 continue
             try:
+                # 1단계: '오늘 하루 이창을 열지 않음' 체크박스 클릭 (재표시 방지)
+                for chk in win.descendants(control_type='CheckBox'):
+                    label = chk.window_text().strip()
+                    if any(t in label for t in TODAY_CHECKBOX_TEXTS):
+                        try:
+                            chk.click()
+                            logger.info(f"포털 배너 체크박스 클릭: '{label}'")
+                            time.sleep(0.3)
+                        except Exception:
+                            pass
+
+                # 2단계: 닫기 버튼 클릭
                 for btn in win.descendants(control_type='Button'):
                     label = btn.window_text().strip()
-                    if label in CLOSE_LABELS:
+                    if label in CLOSE_BTN_LABELS:
                         try:
                             btn.click()
-                            logger.info(f"포털 배너 닫기: '{label}' 클릭")
+                            logger.info(f"포털 배너 닫기 버튼 클릭: '{label}'")
                             time.sleep(0.4)
                         except Exception:
                             pass
@@ -733,8 +753,8 @@ def _dismiss_portal_banners():
 
 def _click_service_button_by_image(service):
     """
-    참조 이미지(neis_ref.png / edufine_ref.png)로 버튼을 찾아 Ctrl+클릭.
-    Ctrl+클릭 → 새 탭에서 열기 (현재 포털 탭 유지).
+    참조 이미지(neis_ref.png / edufine_ref.png)로 버튼을 찾아 클릭.
+    서비스 버튼은 새 창(팝업)으로 열리므로 일반 클릭 사용.
     반환: True(성공) / False(실패)
     """
     import pyautogui
@@ -755,10 +775,8 @@ def _click_service_button_by_image(service):
                 pyautogui.FAILSAFE = False
                 pyautogui.moveTo(cx, cy, duration=0.3)
                 time.sleep(0.15)
-                pyautogui.keyDown('ctrl')
                 pyautogui.click(cx, cy)
-                pyautogui.keyUp('ctrl')
-                logger.info(f"{service} 버튼 Ctrl+클릭 완료 (새 탭)")
+                logger.info(f"{service} 버튼 클릭 완료 (새 팝업 창)")
                 return True
         except Exception as e:
             logger.debug(f"이미지 매칭 예외 ({service}, conf={confidence}): {e}")
@@ -817,7 +835,8 @@ def _find_service_btn_via_uia(service, region):
 
 def _click_service_by_text(service):
     """
-    UIA 텍스트 기반으로 서비스 버튼 탐색 후 Ctrl+클릭 (최종 폴백).
+    UIA 텍스트 기반으로 서비스 버튼 탐색 후 클릭 (최종 폴백).
+    서비스 버튼은 새 창(팝업)으로 열리므로 일반 클릭 사용.
     반환: True / False
     """
     import pyautogui
@@ -840,20 +859,15 @@ def _click_service_by_text(service):
                             rect = elem.rectangle()
                             w_px = rect.right - rect.left
                             h_px = rect.bottom - rect.top
-                            # 너무 크거나 좌표 0인 요소 제외 (컨테이너 오인식 방지)
                             if w_px > 300 or h_px > 100 or (rect.left == 0 and rect.top == 0):
                                 continue
                             cx = (rect.left + rect.right) // 2
                             cy = (rect.top + rect.bottom) // 2
-                            logger.info(
-                                f"텍스트 매칭 ({service}): '{text}' at ({cx},{cy})"
-                            )
+                            logger.info(f"텍스트 매칭 ({service}): '{text}' at ({cx},{cy})")
                             pyautogui.FAILSAFE = False
                             pyautogui.moveTo(cx, cy, duration=0.3)
                             time.sleep(0.1)
-                            pyautogui.keyDown('ctrl')
                             pyautogui.click(cx, cy)
-                            pyautogui.keyUp('ctrl')
                             return True
                     except Exception:
                         pass
@@ -861,6 +875,37 @@ def _click_service_by_text(service):
                 pass
     except Exception as e:
         logger.debug(f"텍스트 매칭 오류: {e}")
+    return False
+
+
+def _return_to_portal_window(portal_url):
+    """
+    서비스 팝업 창이 열린 후 포털 브라우저 창으로 포커스를 복귀.
+    portal_url 도메인(eduptl.kr)이 제목에 포함된 창을 찾아 전면으로 올림.
+    both 모드에서 첫 서비스 클릭 후 두 번째 서비스 버튼 탐색 전에 호출.
+    """
+    import win32gui, win32con
+    region = _extract_region(portal_url) or ''
+    # 포털 창 식별 키워드 — 창 제목에 포함될 것으로 예상되는 문자열
+    PORTAL_KEYWORDS = ['eduptl', '업무포털', '교육행정', region]
+
+    try:
+        from pywinauto import Desktop
+        for win in Desktop(backend='uia').windows(class_name='Chrome_WidgetWin_1'):
+            if not win.is_visible():
+                continue
+            title = win.window_text().strip().lower()
+            if any(kw.lower() in title for kw in PORTAL_KEYWORDS if kw):
+                hwnd = win.handle
+                if win32gui.IsIconic(hwnd):
+                    win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+                    time.sleep(0.3)
+                win32gui.SetForegroundWindow(hwnd)
+                logger.info(f"포털 창 복귀: '{win.window_text()}'")
+                time.sleep(0.5)
+                return True
+    except Exception as e:
+        logger.debug(f"포털 창 복귀 실패: {e}")
     return False
 
 
@@ -904,7 +949,7 @@ def open_additional_services(settings):
     if after_login in ('edufine', 'both'):
         services.append('edufine')
 
-    for service in services:
+    for idx, service in enumerate(services):
         label = '나이스' if service == 'neis' else 'K-에듀파인'
         logger.info(f"[{label}] 버튼 탐색 시작")
 
@@ -922,10 +967,8 @@ def open_additional_services(settings):
                 pyautogui.FAILSAFE = False
                 pyautogui.moveTo(cx, cy, duration=0.3)
                 time.sleep(0.15)
-                pyautogui.keyDown('ctrl')
                 pyautogui.click(cx, cy)
-                pyautogui.keyUp('ctrl')
-                logger.info(f"[{label}] UIA 버튼 Ctrl+클릭 완료")
+                logger.info(f"[{label}] UIA 버튼 클릭 완료 (새 팝업 창)")
                 ok = True
 
         if not ok:
@@ -933,7 +976,12 @@ def open_additional_services(settings):
             ok = _click_service_by_text(service)
 
         if ok:
-            logger.info(f"[{label}] 열기 완료 → 새 탭 대기")
-            time.sleep(2.0)  # 새 탭 로딩 대기
+            logger.info(f"[{label}] 열기 완료 → 팝업 창 대기")
+            time.sleep(2.0)  # 팝업 창 로딩 대기
+
+            # both 모드: 다음 서비스가 있으면 포털 창으로 복귀
+            if len(services) > 1 and idx < len(services) - 1:
+                logger.info("both 모드: 포털 창으로 복귀 후 다음 서비스 탐색")
+                _return_to_portal_window(portal_url)
         else:
             logger.warning(f"[{label}] 버튼을 찾지 못했습니다 (이미지/UIA/텍스트 모두 실패)")
