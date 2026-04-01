@@ -724,10 +724,12 @@ def _dismiss_portal_banners():
             if not win.is_visible():
                 continue
             try:
-                # 1단계: '오늘 하루 이창을 열지 않음' 체크박스 클릭 (재표시 방지)
+                # 1단계: 배너 체크박스 탐색 (배너 존재 여부 확인)
+                banner_found = False
                 for chk in win.descendants(control_type='CheckBox'):
                     label = chk.window_text().strip()
                     if any(t in label for t in TODAY_CHECKBOX_TEXTS):
+                        banner_found = True
                         try:
                             chk.click()
                             logger.info(f"포털 배너 체크박스 클릭: '{label}'")
@@ -735,16 +737,19 @@ def _dismiss_portal_banners():
                         except Exception:
                             pass
 
-                # 2단계: 닫기 버튼 클릭
-                for btn in win.descendants(control_type='Button'):
-                    label = btn.window_text().strip()
-                    if label in CLOSE_BTN_LABELS:
-                        try:
-                            btn.click()
-                            logger.info(f"포털 배너 닫기 버튼 클릭: '{label}'")
-                            time.sleep(0.4)
-                        except Exception:
-                            pass
+                # 2단계: 배너가 확인된 경우에만 닫기 버튼 클릭
+                # (배너 없을 때 브라우저 탭/창 닫기 버튼을 잘못 클릭하는 것 방지)
+                if banner_found:
+                    for btn in win.descendants(control_type='Button'):
+                        label = btn.window_text().strip()
+                        if label in CLOSE_BTN_LABELS:
+                            try:
+                                btn.click()
+                                logger.info(f"포털 배너 닫기 버튼 클릭: '{label}'")
+                                time.sleep(0.4)
+                                break  # 닫기 버튼 하나만 클릭
+                            except Exception:
+                                pass
             except Exception:
                 pass
     except Exception:
@@ -880,28 +885,51 @@ def _click_service_by_text(service):
 
 def _return_to_portal_window(portal_url):
     """
-    서비스 팝업 창이 열린 후 포털 브라우저 창으로 포커스를 복귀.
-    portal_url 도메인(eduptl.kr)이 제목에 포함된 창을 찾아 전면으로 올림.
-    both 모드에서 첫 서비스 클릭 후 두 번째 서비스 버튼 탐색 전에 호출.
+    서비스 탭/창이 열린 후 포털 탭으로 포커스를 복귀.
+
+    나이스/에듀파인은 같은 Chrome 창의 새 탭으로 열리는 경우가 많으므로
+    창 제목 검색보다 탭 바의 TabItem 클릭이 우선.
+
+    1순위: Chrome 탭 바에서 '업무포털' TabItem 찾아 클릭
+    2순위: 별도 창으로 열린 경우 창 제목으로 탐색 (SetForegroundWindow)
     """
     import win32gui, win32con
-    region = _extract_region(portal_url) or ''
-    # 포털 창 식별 키워드 — 창 제목에 포함될 것으로 예상되는 문자열
-    PORTAL_KEYWORDS = ['eduptl', '업무포털', '교육행정', region]
+    import pyautogui
+    pyautogui.FAILSAFE = False
+    PORTAL_TAB_KEYWORDS = ['업무포털', 'eduptl', '교육행정']
 
     try:
         from pywinauto import Desktop
         for win in Desktop(backend='uia').windows(class_name='Chrome_WidgetWin_1'):
             if not win.is_visible():
                 continue
-            title = win.window_text().strip().lower()
-            if any(kw.lower() in title for kw in PORTAL_KEYWORDS if kw):
+            try:
+                # 1순위: 탭 바 TabItem 클릭 — 같은 창 내 탭 전환
+                for tab in win.descendants(control_type='TabItem'):
+                    try:
+                        title = tab.window_text().strip()
+                        if any(kw in title for kw in PORTAL_TAB_KEYWORDS):
+                            tab.click_input()
+                            logger.info(f"포털 탭 클릭으로 복귀: '{title}'")
+                            time.sleep(0.5)
+                            return True
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+        # 2순위: 포털이 별도 창으로 열린 경우 창 제목으로 탐색
+        for win in Desktop(backend='uia').windows(class_name='Chrome_WidgetWin_1'):
+            if not win.is_visible():
+                continue
+            title = win.window_text().strip()
+            if any(kw in title for kw in PORTAL_TAB_KEYWORDS):
                 hwnd = win.handle
                 if win32gui.IsIconic(hwnd):
                     win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
                     time.sleep(0.3)
                 win32gui.SetForegroundWindow(hwnd)
-                logger.info(f"포털 창 복귀: '{win.window_text()}'")
+                logger.info(f"포털 창 복귀 (별도 창): '{title}'")
                 time.sleep(0.5)
                 return True
     except Exception as e:
@@ -951,6 +979,11 @@ def open_additional_services(settings):
 
     for idx, service in enumerate(services):
         label = '나이스' if service == 'neis' else 'K-에듀파인'
+
+        # 버튼 탐색 전 포털 창을 반드시 전면으로 (앞 서비스 창이 덮고 있을 수 있음)
+        _return_to_portal_window(portal_url)
+        time.sleep(0.5)
+
         logger.info(f"[{label}] 버튼 탐색 시작")
 
         ok = False
@@ -978,10 +1011,5 @@ def open_additional_services(settings):
         if ok:
             logger.info(f"[{label}] 열기 완료 → 팝업 창 대기")
             time.sleep(2.0)  # 팝업 창 로딩 대기
-
-            # both 모드: 다음 서비스가 있으면 포털 창으로 복귀
-            if len(services) > 1 and idx < len(services) - 1:
-                logger.info("both 모드: 포털 창으로 복귀 후 다음 서비스 탐색")
-                _return_to_portal_window(portal_url)
         else:
             logger.warning(f"[{label}] 버튼을 찾지 못했습니다 (이미지/UIA/텍스트 모두 실패)")

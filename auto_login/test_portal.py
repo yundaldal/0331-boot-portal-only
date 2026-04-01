@@ -24,4 +24,12 @@ except Exception as e:
     logger.error(f"브라우저 사전 준비 실패: {e}")
 
 result = portal_login.login(settings, advanced, chrome_ready=browser_ready)
-logger.info(f"결과: {'성공' if result else '실패'}")
+logger.info(f"로그인 결과: {'성공' if result else '실패'}")
+
+if result:
+    after_login = settings.get('after_login', 'none')
+    if after_login != 'none':
+        logger.info(f"추가 서비스 열기 시작: {after_login}")
+        portal_login.open_additional_services(settings)
+    else:
+        logger.info("after_login=none → 추가 서비스 없음")
