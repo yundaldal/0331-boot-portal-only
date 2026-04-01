@@ -640,11 +640,15 @@ def _portal_keyboard_cert_flow(password, timeout=90):
             win32clipboard.CloseClipboard()
 
             # 브라우저 창에 포커스 복구 (Chrome/Edge 공통 클래스)
-            # AttachThreadInput 방식 — 사용자가 다른 창 클릭 후에도 확실히 전면 전환
+            # FindWindow는 VS Code 등 Electron 앱도 반환하므로 브라우저 제목으로 필터링
             try:
-                hwnd = win32gui.FindWindow('Chrome_WidgetWin_1', None)
-                if hwnd:
-                    _force_foreground(hwnd)
+                from pywinauto import Desktop as _Desktop
+                for _w in _Desktop(backend='uia').windows(class_name='Chrome_WidgetWin_1'):
+                    if not _w.is_visible():
+                        continue
+                    if any(b in _w.window_text() for b in ['Chrome', 'Edge', 'eduptl', '업무포털']):
+                        _force_foreground(_w.handle)
+                        break
             except Exception:
                 pass
 
@@ -730,16 +734,25 @@ def _dismiss_portal_banners():
     """
     포털 로그인 직후 표시되는 배너/공지 팝업을 닫는다.
 
-    실제 포털 배너 구조:
-      [ ] 오늘 하루 이창을 열지 않음   ← 체크박스
-      [ ] 일주일동안 이창을 열지 않음  ← 체크박스
-      [닫기]                           ← 닫기 버튼
-
-    체크박스를 먼저 클릭(오늘 하루 비표시)한 뒤 닫기 버튼을 클릭한다.
+    지역마다 배너 구조가 다를 수 있으므로 두 가지 방식으로 탐색:
+      A) 체크박스 방식: '오늘 하루' 계열 체크박스가 있는 배너 → 체크 후 닫기
+      B) 공지 방식: 체크박스 없이 닫기 버튼만 있는 공지/안내 배너
+         → 배너임을 나타내는 키워드(공지/안내/알림 등)가 콘텐츠에 있을 때만 닫기
+         → 탭 바 닫기 버튼(창 상단 60px 이내)은 제외하여 오탐 방지
     """
     CLOSE_BTN_LABELS = ('닫기', 'Close', '×', 'X')
-    # 체크박스 텍스트 — 실제 확인된 포털 배너 텍스트
-    TODAY_CHECKBOX_TEXTS = ('오늘 하루 이창을 열지 않음',)
+    # 지역별 다양한 '오늘 하루' 표현 모두 포함
+    TODAY_CHECKBOX_TEXTS = (
+        '오늘 하루 이창을 열지 않음',
+        '오늘하루 열지않기',
+        '하루동안 열지 않음',
+        '이 창을 열지 않음',
+        '열지 않음',
+        '오늘 하루',
+        '일주일동안',
+    )
+    # 배너/공지 임을 나타내는 콘텐츠 키워드 (체크박스 없는 배너 감지용)
+    BANNER_CONTENT_KEYWORDS = ('공지', '안내', '알림', '팝업', '공고', '업무포털')
 
     try:
         from pywinauto import Desktop
@@ -747,8 +760,13 @@ def _dismiss_portal_banners():
         for win in desk.windows(class_name='Chrome_WidgetWin_1'):
             if not win.is_visible():
                 continue
+            # VS Code 등 Electron 앱 제외
+            if not any(b in win.window_text() for b in ['Chrome', 'Edge', 'eduptl', '업무포털']):
+                continue
             try:
-                # 1단계: 배너 체크박스 탐색 (배너 존재 여부 확인)
+                win_top = win.rectangle().top  # 창 상단 y 좌표
+
+                # ── A) 체크박스 방식 ───────────────────────────────────────
                 banner_found = False
                 for chk in win.descendants(control_type='CheckBox'):
                     label = chk.window_text().strip()
@@ -761,19 +779,53 @@ def _dismiss_portal_banners():
                         except Exception:
                             pass
 
-                # 2단계: 배너가 확인된 경우에만 닫기 버튼 클릭
-                # (배너 없을 때 브라우저 탭/창 닫기 버튼을 잘못 클릭하는 것 방지)
                 if banner_found:
                     for btn in win.descendants(control_type='Button'):
                         label = btn.window_text().strip()
                         if label in CLOSE_BTN_LABELS:
                             try:
                                 btn.click()
-                                logger.info(f"포털 배너 닫기 버튼 클릭: '{label}'")
+                                logger.info(f"포털 배너 닫기(체크박스 방식): '{label}'")
                                 time.sleep(0.4)
-                                break  # 닫기 버튼 하나만 클릭
+                                break
                             except Exception:
                                 pass
+                    continue  # 이 창은 처리 완료
+
+                # ── B) 공지 방식 (체크박스 없는 배너) ────────────────────
+                # 배너 콘텐츠 키워드 + 탭 바 아래의 닫기 버튼 조합으로 탐지
+                has_banner_text = False
+                try:
+                    for elem in win.descendants():
+                        try:
+                            t = elem.window_text().strip()
+                            if t and any(kw in t for kw in BANNER_CONTENT_KEYWORDS):
+                                rect = elem.rectangle()
+                                # 탭 바(상단 60px) 아래 콘텐츠 영역에 있는 텍스트만
+                                if rect.top > win_top + 60:
+                                    has_banner_text = True
+                                    break
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+
+                if has_banner_text:
+                    for btn in win.descendants(control_type='Button'):
+                        label = btn.window_text().strip()
+                        if label not in CLOSE_BTN_LABELS:
+                            continue
+                        try:
+                            rect = btn.rectangle()
+                            # 탭 바(상단 60px) 아래에 있는 버튼만 클릭
+                            if rect.top <= win_top + 60:
+                                continue
+                            btn.click()
+                            logger.info(f"포털 공지 배너 닫기(공지 방식): '{label}'")
+                            time.sleep(0.4)
+                            break
+                        except Exception:
+                            pass
             except Exception:
                 pass
     except Exception:
@@ -839,6 +891,9 @@ def _find_service_btn_via_uia(service, region):
         desk = Desktop(backend='uia')
         for win in desk.windows(class_name='Chrome_WidgetWin_1'):
             if not win.is_visible():
+                continue
+            # VS Code 등 Electron 앱 제외
+            if not any(b in win.window_text() for b in ['Chrome', 'Edge', 'eduptl', '업무포털']):
                 continue
             try:
                 # Hyperlink 타입만 스캔 (전체 descendants 대비 빠름)
